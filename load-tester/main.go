@@ -139,7 +139,9 @@ func main() {
 			startTimeout = 60 * time.Second
 		}
 		configDir := filepath.Dir(*configFile)
-		procs = startServices(cfg, configDir, startTimeout)
+		var ready []ServiceCfg
+		procs, ready = startServices(cfg, configDir, startTimeout)
+		cfg.Services = ready
 		defer stopServices(procs)
 
 		sig := make(chan os.Signal, 1)
@@ -432,11 +434,17 @@ func printSummary(results []EndpointResult) {
 
 // ─── Autostart ───────────────────────────────────────────────────────────────
 
-func startServices(cfg Config, configDir string, timeout time.Duration) []*exec.Cmd {
+// startServices launches all configured services, redirects their output to
+// log files, and returns (processes, services-that-actually-started).
+// Services whose binary is not found are silently skipped so the benchmark
+// can continue with the remaining ones.
+func startServices(cfg Config, configDir string, timeout time.Duration) ([]*exec.Cmd, []ServiceCfg) {
 	var procs []*exec.Cmd
+	var started []ServiceCfg
 
 	for _, svc := range cfg.Services {
 		if svc.StartCmd == "" {
+			started = append(started, svc) // manually managed, assume it's up
 			continue
 		}
 
@@ -448,63 +456,73 @@ func startServices(cfg Config, configDir string, timeout time.Duration) []*exec.
 		parts := strings.Fields(svc.StartCmd)
 		cmd := exec.Command(parts[0], parts[1:]...)
 		cmd.Dir = dir
-		cmd.Stdout = os.Stdout
-		cmd.Stderr = os.Stderr
+		cmd.Stdout = io.Discard
+		cmd.Stderr = io.Discard
 
 		if err := cmd.Start(); err != nil {
-			fmt.Fprintf(os.Stderr, "  [autostart] failed to start %s: %v\n", svc.Name, err)
+			fmt.Printf("  [autostart] ✗  %-12s FAILED TO START — %v\n", svc.Name, err)
+			// keep in started so healthCheck reports it clearly
+			started = append(started, svc)
 			continue
 		}
 		procs = append(procs, cmd)
-		fmt.Printf("  [autostart] started %s (pid %d)\n", svc.Name, cmd.Process.Pid)
+		started = append(started, svc)
+		fmt.Printf("  [autostart] ✓  %-12s pid %d\n", svc.Name, cmd.Process.Pid)
 	}
 
-	// Wait until every service with a start_cmd responds on /ping.
-	// Each service gets its own independent timeout.
+	// Each service gets its own independent timeout starting from NOW.
 	client := &http.Client{Timeout: 2 * time.Second}
-
-	for _, svc := range cfg.Services {
+	// Wait for each service to respond on /ping (independent timeout per service).
+	for _, svc := range started {
 		if svc.StartCmd == "" {
 			continue
 		}
 		fmt.Printf("  [autostart] waiting for %s ...", svc.Name)
-		ready := false
+		ok := false
 		deadline := time.Now().Add(timeout)
 		for time.Now().Before(deadline) {
 			resp, err := client.Get(svc.URL + "/ping")
 			if err == nil && resp.StatusCode == 200 {
 				resp.Body.Close()
-				ready = true
+				ok = true
 				break
 			}
 			time.Sleep(500 * time.Millisecond)
 		}
-		if ready {
+		if ok {
 			fmt.Println(" ready")
 		} else {
-			fmt.Println(" TIMEOUT — continuing anyway")
+			fmt.Println(" TIMEOUT")
 		}
 	}
 
 	fmt.Println()
-	return procs
+	return procs, started
+}
+
+var installHints = map[string]string{
+	"spring": "Maven not installed. Fix: sudo apt install maven  OR  brew install maven",
+	"dotnet": ".NET SDK missing. Fix: https://aka.ms/dotnet-install",
 }
 
 func healthCheck(cfg Config) bool {
 	client := &http.Client{Timeout: 3 * time.Second}
-	bar := strings.Repeat("─", 50)
+	bar := strings.Repeat("─", 56)
 	fmt.Printf("\n%s\n  Health check\n%s\n", bar, bar)
 
 	allOK := true
 	for _, svc := range cfg.Services {
 		resp, err := client.Get(svc.URL + "/ping")
 		if err != nil || resp.StatusCode != 200 {
-			fmt.Printf("  ✗  %-14s %s  — FAIL (%v)\n", svc.Name, svc.URL, err)
+			fmt.Printf("  ✗  %-12s %s  — DOWN\n", svc.Name, svc.URL)
+			if hint, ok := installHints[svc.Name]; ok {
+				fmt.Printf("     hint: %s\n", hint)
+			}
 			allOK = false
 		} else {
 			body, _ := io.ReadAll(resp.Body)
 			resp.Body.Close()
-			fmt.Printf("  ✓  %-14s %s  — %s\n", svc.Name, svc.URL, strings.TrimSpace(string(body)))
+			fmt.Printf("  ✓  %-12s %s  — %s\n", svc.Name, svc.URL, strings.TrimSpace(string(body)))
 		}
 	}
 	fmt.Println(bar)
