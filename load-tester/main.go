@@ -258,8 +258,8 @@ func runRamp(baseURL string, ep Endpoint, stages []int, stageDur, cooldown, reqT
 
 	for _, workers := range stages {
 		fmt.Printf("    %-8d  running...%-68s\r", workers, "")
-		mem := queryMetrics(client, baseURL)
 		r := runStage(client, url, ep.Method, ep.Body, workers, stageDur)
+		mem := queryMetrics(client, baseURL)
 		r.MemMB = mem.MemMB
 		r.Threads = mem.Threads
 

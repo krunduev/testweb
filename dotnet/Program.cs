@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Text.Json;
 
 var builder = WebApplication.CreateBuilder(args);
+builder.Logging.ClearProviders();
 builder.WebHost.UseUrls("http://0.0.0.0:8085");
 builder.Services.ConfigureHttpJsonOptions(opts =>
 {

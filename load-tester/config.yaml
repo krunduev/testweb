@@ -11,10 +11,10 @@ start_timeout: "120s"
 stage_duration: "10s"
 
 # Maximum concurrent workers (20-core machine).
-max_workers: 2000
+max_workers: 200
 
 # Ramp stages — values above max_workers are ignored.
-stages: [10, 25, 50, 100, 200, 400, 800, 1200, 1600, 2000]
+stages: [10, 25, 50, 100, 200]
 
 # Fibonacci N (recursive, CPU-bound).
 fib_n: 35
