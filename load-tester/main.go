@@ -151,6 +151,13 @@ func main() {
 		}()
 	}
 
+	// Health check — ping every service before starting long tests
+	if !healthCheck(cfg) {
+		fmt.Fprintln(os.Stderr, "\nAbort: fix the services above and retry.")
+		stopServices(procs)
+		os.Exit(1)
+	}
+
 	endpoints := []Endpoint{
 		{Name: "GET /ping",   Method: "GET",  Path: "/ping"},
 		{
@@ -481,6 +488,30 @@ func startServices(cfg Config, configDir string, timeout time.Duration) []*exec.
 
 	fmt.Println()
 	return procs
+}
+
+func healthCheck(cfg Config) bool {
+	client := &http.Client{Timeout: 3 * time.Second}
+	bar := strings.Repeat("─", 50)
+	fmt.Printf("\n%s\n  Health check\n%s\n", bar, bar)
+
+	allOK := true
+	for _, svc := range cfg.Services {
+		resp, err := client.Get(svc.URL + "/ping")
+		if err != nil || resp.StatusCode != 200 {
+			fmt.Printf("  ✗  %-14s %s  — FAIL (%v)\n", svc.Name, svc.URL, err)
+			allOK = false
+		} else {
+			body, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			fmt.Printf("  ✓  %-14s %s  — %s\n", svc.Name, svc.URL, strings.TrimSpace(string(body)))
+		}
+	}
+	fmt.Println(bar)
+	if allOK {
+		fmt.Println("  All services are up. Starting benchmark...\n")
+	}
+	return allOK
 }
 
 func stopServices(procs []*exec.Cmd) {
