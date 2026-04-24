@@ -1,59 +1,82 @@
 # ── Web Service Benchmark Configuration ──────────────────────────────────────
 
-# Duration of each load stage. After each stage the ramp increases.
+# Автоматически запустить все сервисы перед тестом и убить после.
+# start_cmd и start_dir должны быть указаны для каждого сервиса.
+autostart: true
+
+# Сколько ждать пока сервис ответит на /ping (для Java/dotnet нужно больше).
+start_timeout: "120s"
+
+# Duration of each load stage.
 stage_duration: "30s"
 
-# Maximum number of concurrent goroutines.
-# 20-core machine comfortably handles 2000+ concurrent workers.
+# Maximum concurrent workers (20-core machine).
 max_workers: 2000
 
-# Worker counts for the ramp-up test.
-# Any value > max_workers is ignored automatically.
+# Ramp stages — values above max_workers are ignored.
 stages: [10, 25, 50, 100, 200, 400, 800, 1200, 1600, 2000]
 
-# Fibonacci N for /fibonacci endpoint (recursive — CPU-bound).
+# Fibonacci N (recursive, CPU-bound).
 fib_n: 35
 
-# Bytes to allocate per /alloc request.
-alloc_size: 1048576   # 1 MB
+# Bytes to allocate per /alloc request (1 MB).
+alloc_size: 1048576
 
-# Stop ramping a service when error rate exceeds this threshold (%).
+# Stop ramp when error rate (%) exceeds this.
 err_threshold: 5.0
 
-# Stop ramping a service when P99 latency exceeds this threshold (ms).
+# Stop ramp when P99 latency (ms) exceeds this.
 p99_threshold: 5000.0
 
 # Output HTML report path.
 output_html: "report.html"
 
-# Pause between individual load stages (lets service stabilise).
+# Pause between load stages.
 cooldown: "2s"
 
 # Per-request HTTP timeout.
 request_timeout: "5s"
 
 # ── Services ─────────────────────────────────────────────────────────────────
+# start_dir — путь к директории сервиса (относительно config.yaml)
+# start_cmd — команда запуска (пустая = сервис запущен вручную)
 services:
   - name: stdlib-ej
     url: http://localhost:8081
+    start_dir: "../go-stdlib-ej"
+    start_cmd: "go run ."
 
   - name: gin-ej
     url: http://localhost:8082
+    start_dir: "../go-gin-ej"
+    start_cmd: "go run ."
 
   - name: fiber-ej
     url: http://localhost:8083
+    start_dir: "../go-fiber-ej"
+    start_cmd: "go run ."
 
   - name: spring
     url: http://localhost:8084
+    start_dir: "../java-spring"
+    start_cmd: "mvn spring-boot:run"
 
   - name: dotnet
     url: http://localhost:8085
+    start_dir: "../dotnet"
+    start_cmd: "dotnet run"
 
   - name: stdlib
     url: http://localhost:8086
+    start_dir: "../go-stdlib"
+    start_cmd: "go run ."
 
   - name: gin
     url: http://localhost:8087
+    start_dir: "../go-gin"
+    start_cmd: "go run ."
 
   - name: fiber
     url: http://localhost:8088
+    start_dir: "../go-fiber"
+    start_cmd: "go run ."

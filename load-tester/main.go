@@ -9,10 +9,14 @@ import (
 	"math"
 	"net/http"
 	"os"
+	"os/exec"
+	"os/signal"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -21,11 +25,15 @@ import (
 // ─── Config ──────────────────────────────────────────────────────────────────
 
 type ServiceCfg struct {
-	Name string `yaml:"name" json:"name"`
-	URL  string `yaml:"url"  json:"url"`
+	Name     string `yaml:"name"      json:"name"`
+	URL      string `yaml:"url"       json:"url"`
+	StartDir string `yaml:"start_dir" json:"-"`
+	StartCmd string `yaml:"start_cmd" json:"-"`
 }
 
 type Config struct {
+	Autostart      bool         `yaml:"autostart"`
+	StartTimeout   string       `yaml:"start_timeout"`
 	StageDuration  string       `yaml:"stage_duration"`
 	MaxWorkers     int          `yaml:"max_workers"`
 	Stages         []int        `yaml:"stages"`
@@ -122,6 +130,26 @@ func main() {
 	stages := cappedStages(cfg.Stages, cfg.MaxWorkers)
 
 	fmt.Printf("Config: stage=%s  max_workers=%d  stages=%v\n\n", cfg.StageDuration, cfg.MaxWorkers, stages)
+
+	// Auto-start services if configured
+	var procs []*exec.Cmd
+	if cfg.Autostart {
+		startTimeout, _ := time.ParseDuration(cfg.StartTimeout)
+		if startTimeout == 0 {
+			startTimeout = 60 * time.Second
+		}
+		configDir := filepath.Dir(*configFile)
+		procs = startServices(cfg, configDir, startTimeout)
+		defer stopServices(procs)
+
+		sig := make(chan os.Signal, 1)
+		signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
+		go func() {
+			<-sig
+			stopServices(procs)
+			os.Exit(0)
+		}()
+	}
 
 	endpoints := []Endpoint{
 		{Name: "GET /ping",   Method: "GET",  Path: "/ping"},
@@ -391,6 +419,73 @@ func printSummary(results []EndpointResult) {
 				bar = strings.Repeat("█", w)
 			}
 			fmt.Printf("    %d. %-14s %s %.0f RPS\n", i+1, svc.Service.Name, bar, svc.PeakRPS)
+		}
+	}
+}
+
+// ─── Autostart ───────────────────────────────────────────────────────────────
+
+func startServices(cfg Config, configDir string, timeout time.Duration) []*exec.Cmd {
+	var procs []*exec.Cmd
+
+	for _, svc := range cfg.Services {
+		if svc.StartCmd == "" {
+			continue
+		}
+
+		dir := svc.StartDir
+		if !filepath.IsAbs(dir) {
+			dir = filepath.Join(configDir, dir)
+		}
+
+		parts := strings.Fields(svc.StartCmd)
+		cmd := exec.Command(parts[0], parts[1:]...)
+		cmd.Dir = dir
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+
+		if err := cmd.Start(); err != nil {
+			fmt.Fprintf(os.Stderr, "  [autostart] failed to start %s: %v\n", svc.Name, err)
+			continue
+		}
+		procs = append(procs, cmd)
+		fmt.Printf("  [autostart] started %s (pid %d)\n", svc.Name, cmd.Process.Pid)
+	}
+
+	// Wait until every service with a start_cmd responds on /ping
+	client := &http.Client{Timeout: 2 * time.Second}
+	deadline := time.Now().Add(timeout)
+
+	for _, svc := range cfg.Services {
+		if svc.StartCmd == "" {
+			continue
+		}
+		fmt.Printf("  [autostart] waiting for %s ...", svc.Name)
+		ready := false
+		for time.Now().Before(deadline) {
+			resp, err := client.Get(svc.URL + "/ping")
+			if err == nil && resp.StatusCode == 200 {
+				resp.Body.Close()
+				ready = true
+				break
+			}
+			time.Sleep(500 * time.Millisecond)
+		}
+		if ready {
+			fmt.Println(" ready")
+		} else {
+			fmt.Println(" TIMEOUT — continuing anyway")
+		}
+	}
+
+	fmt.Println()
+	return procs
+}
+
+func stopServices(procs []*exec.Cmd) {
+	for _, cmd := range procs {
+		if cmd.Process != nil {
+			cmd.Process.Kill()
 		}
 	}
 }
