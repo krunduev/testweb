@@ -282,19 +282,23 @@ const maxLatencySamples = 500_000
 
 func runStage(client *http.Client, url, method string, body []byte, workers int, dur time.Duration) StageResult {
 	var totalReqs, totalErrs int64
-	latencies := make([]float64, 0, min(workers*200, maxLatencySamples))
-	var mu sync.Mutex
+	perWorker := min(maxLatencySamples/workers+1, 2000)
+	allLatencies := make([][]float64, workers)
 	stop := make(chan struct{})
 	var wg sync.WaitGroup
 	start := time.Now()
 
 	for i := 0; i < workers; i++ {
 		wg.Add(1)
-		go func() {
+		local := make([]float64, 0, perWorker)
+		allLatencies[i] = local
+		go func(slot int) {
 			defer wg.Done()
+			loc := allLatencies[slot]
 			for {
 				select {
 				case <-stop:
+					allLatencies[slot] = loc
 					return
 				default:
 				}
@@ -320,13 +324,11 @@ func runStage(client *http.Client, url, method string, body []byte, workers int,
 					resp.Body.Close()
 				}
 
-				mu.Lock()
-				if len(latencies) < maxLatencySamples {
-					latencies = append(latencies, ms)
+				if len(loc) < perWorker {
+					loc = append(loc, ms)
 				}
-				mu.Unlock()
 			}
-		}()
+		}(i)
 	}
 
 	time.Sleep(dur)
@@ -336,6 +338,15 @@ func runStage(client *http.Client, url, method string, body []byte, workers int,
 	elapsed := time.Since(start).Seconds()
 	reqs := atomic.LoadInt64(&totalReqs)
 	errs := atomic.LoadInt64(&totalErrs)
+
+	total := 0
+	for _, l := range allLatencies {
+		total += len(l)
+	}
+	latencies := make([]float64, 0, total)
+	for _, l := range allLatencies {
+		latencies = append(latencies, l...)
+	}
 	sort.Float64s(latencies)
 
 	errPct := 0.0
