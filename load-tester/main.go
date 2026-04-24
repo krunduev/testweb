@@ -188,13 +188,12 @@ func main() {
 			printHeader()
 
 			svcRes := ServiceResult{Service: svc}
-			svcRes.Stages = runRamp(svc.URL, ep, stages, stageDur, cooldownDur, reqTimeout, cfg)
-			for _, r := range svcRes.Stages {
+			svcRes.Stages = runRamp(svc.URL, ep, stages, stageDur, cooldownDur, reqTimeout, cfg, func(r StageResult) {
 				if r.RPS > svcRes.PeakRPS {
 					svcRes.PeakRPS = r.RPS
 				}
 				printRow(r)
-			}
+			})
 			printFooter()
 			epRes.Services = append(epRes.Services, svcRes)
 
@@ -244,7 +243,7 @@ func cappedStages(stages []int, max int) []int {
 
 // ─── Ramp test ───────────────────────────────────────────────────────────────
 
-func runRamp(baseURL string, ep Endpoint, stages []int, stageDur, cooldown, reqTimeout time.Duration, cfg Config) []StageResult {
+func runRamp(baseURL string, ep Endpoint, stages []int, stageDur, cooldown, reqTimeout time.Duration, cfg Config, onStage func(StageResult)) []StageResult {
 	maxConn := stages[len(stages)-1] + 200
 	client := &http.Client{
 		Timeout: reqTimeout,
@@ -258,14 +257,20 @@ func runRamp(baseURL string, ep Endpoint, stages []int, stageDur, cooldown, reqT
 	url := baseURL + ep.Path
 
 	for _, workers := range stages {
+		fmt.Printf("    %-8d  running...%-68s\r", workers, "")
 		mem := queryMetrics(client, baseURL)
 		r := runStage(client, url, ep.Method, ep.Body, workers, stageDur)
 		r.MemMB = mem.MemMB
 		r.Threads = mem.Threads
-		results = append(results, r)
 
-		if r.ErrPct > cfg.ErrThreshold || r.P99 > cfg.P99Threshold {
-			results[len(results)-1].HitLimit = true
+		hitLimit := r.ErrPct > cfg.ErrThreshold || r.P99 > cfg.P99Threshold
+		if hitLimit {
+			r.HitLimit = true
+		}
+		results = append(results, r)
+		onStage(r)
+
+		if hitLimit {
 			break
 		}
 		time.Sleep(cooldown)

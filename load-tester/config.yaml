@@ -8,7 +8,7 @@ autostart: true
 start_timeout: "120s"
 
 # Duration of each load stage.
-stage_duration: "30s"
+stage_duration: "10s"
 
 # Maximum concurrent workers (20-core machine).
 max_workers: 2000
