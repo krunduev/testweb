@@ -452,9 +452,9 @@ func startServices(cfg Config, configDir string, timeout time.Duration) []*exec.
 		fmt.Printf("  [autostart] started %s (pid %d)\n", svc.Name, cmd.Process.Pid)
 	}
 
-	// Wait until every service with a start_cmd responds on /ping
+	// Wait until every service with a start_cmd responds on /ping.
+	// Each service gets its own independent timeout.
 	client := &http.Client{Timeout: 2 * time.Second}
-	deadline := time.Now().Add(timeout)
 
 	for _, svc := range cfg.Services {
 		if svc.StartCmd == "" {
@@ -462,6 +462,7 @@ func startServices(cfg Config, configDir string, timeout time.Duration) []*exec.
 		}
 		fmt.Printf("  [autostart] waiting for %s ...", svc.Name)
 		ready := false
+		deadline := time.Now().Add(timeout)
 		for time.Now().Before(deadline) {
 			resp, err := client.Get(svc.URL + "/ping")
 			if err == nil && resp.StatusCode == 200 {
